@@ -1,101 +1,56 @@
 import os
 import json
+import streamlit as st  # <-- ADD THIS
 from groq import Groq
 from dotenv import load_dotenv
 
-# Load API key from .env file
 load_dotenv()
 
-# ─── Groq Client ───────────────────────────────────────────────────────────────
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+# Use Streamlit Secrets for the API Key if deployed, otherwise use env
+api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
+client = Groq(api_key=api_key)
 
-# ─── System Prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """
 You are an expert AI customer support analyst.
-
-Your job is to analyze a customer message and return a JSON object with exactly these three fields:
-
-1. "category": Classify the message into ONE of these categories only:
-   - Complaint
-   - Refund/Return
-   - Sales Inquiry
-   - Delivery Question
-   - Account/Technical Issue
-   - General Query
-   - Spam
-
-2. "sentiment": Identify the emotional tone as exactly ONE of:
-   - Positive
-   - Neutral
-   - Negative
-
-3. "auto_reply": Write a short (2-4 sentences), professional, empathetic auto-reply
-   appropriate for the message. Sound human and helpful.
-
-STRICT RULES:
-- Return ONLY valid JSON. No explanation, no markdown, no extra text.
-- Do not wrap the JSON in code blocks.
-- Example output format:
-{
-  "category": "Complaint",
-  "sentiment": "Negative",
-  "auto_reply": "We sincerely apologize for the inconvenience you've experienced. Our support team will look into this immediately and get back to you within 24 hours."
-}
+Return ONLY valid JSON with fields: "category", "sentiment", "auto_reply".
 """
 
-# ─── Main Analysis Function ────────────────────────────────────────────────────
 def analyze_message(customer_message: str) -> dict:
-    """
-    Send a customer message to Groq (LLaMA 3) and return:
-    {
-        "category": str,
-        "sentiment": str,
-        "auto_reply": str
-    }
-    Returns {"error": str} on failure.
-    """
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",   # Free & powerful Groq model
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user",   "content": f"Customer message: {customer_message}"},
             ],
-            temperature=0.3,       # Low temp = consistent, structured output
-            max_tokens=300,
+            temperature=0.3,
         )
-
         raw_text = response.choices[0].message.content.strip()
-
-        # Clean up in case model wraps in markdown code fences
         raw_text = raw_text.replace("```json", "").replace("```", "").strip()
-
-        result = json.loads(raw_text)
-
-        # Validate keys
-        required_keys = {"category", "sentiment", "auto_reply"}
-        if not required_keys.issubset(result.keys()):
-            return {"error": "Incomplete response from AI. Missing fields."}
-
-        # Validate allowed values
-        valid_categories = {
-            "Complaint", "Refund/Return", "Sales Inquiry",
-            "Delivery Question", "Account/Technical Issue",
-            "General Query", "Spam"
-        }
-        valid_sentiments = {"Positive", "Neutral", "Negative"}
-
-        if result["category"] not in valid_categories:
-            result["category"] = "General Query"   # fallback
-
-        if result["sentiment"] not in valid_sentiments:
-            result["sentiment"] = "Neutral"         # fallback
-
-        return result
-
-    except json.JSONDecodeError:
-        return {"error": "AI returned invalid JSON. Please try again."}
+        return json.loads(raw_text)
     except Exception as e:
         return {"error": str(e)}
-    
-    
+
+# ─── STREAMLIT UI (This is what fixes the "Blue Circle") ──────────────────
+st.title("📩 AI Customer Support Analyzer")
+st.write("Enter a customer message below to analyze sentiment and generate a reply.")
+
+user_input = st.text_area("Customer Message:", placeholder="e.g., My order hasn't arrived yet!")
+
+if st.button("Analyze Message"):
+    if user_input:
+        with st.spinner("Analyzing..."):
+            result = analyze_message(user_input)
+            
+            if "error" in result:
+                st.error(f"Error: {result['error']}")
+            else:
+                st.subheader("Analysis Results")
+                col1, col2 = st.columns(2)
+                col1.metric("Category", result.get("category"))
+                col2.metric("Sentiment", result.get("sentiment"))
+                
+                st.write("**Suggested Auto-Reply:**")
+                st.info(result.get("auto_reply"))
+    else:
+        st.warning("Please enter a message first!")
